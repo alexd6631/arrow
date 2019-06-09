@@ -1,6 +1,7 @@
 package arrow.effects.typeclasses
 
 import arrow.Kind
+import arrow.Kind2
 import arrow.core.Either
 import arrow.core.OptionOf
 import arrow.core.TryOf
@@ -11,6 +12,7 @@ import arrow.data.extensions.listk.traverse.traverse
 import arrow.data.fix
 import arrow.typeclasses.ApplicativeError
 import arrow.typeclasses.Monad
+import arrow.typeclasses.Traverse
 import arrow.typeclasses.suspended.BindSyntax
 import kotlin.coroutines.CoroutineContext
 
@@ -34,6 +36,22 @@ interface FxSyntax<F> : Concurrent<F>, BindSyntax<F> {
         else -> Unit.just()
       }}
     ).map { it.fix() }
+
+  fun <G, A, B> CoroutineContext.genericParTraverse(
+    traverse: Traverse<G>,
+    effects: Kind<G, Kind<F, A>>,
+    f: (A) -> B
+  ): Kind<F, Kind<G, B>> =
+    with(traverse) {
+      effects.map { fa -> startFiber(fa.map(f)) }
+        .sequence(this@FxSyntax).bracketCase(
+          use = { fibers -> fibers.traverse(this@FxSyntax) { it.join() } },
+          release = { fibers, exit -> when (exit) {
+            ExitCase.Canceled -> fibers.traverse(this@FxSyntax) { it.cancel() }.map { Unit }
+            else -> Unit.just()
+          }}
+        )
+    }
 
   fun <A> CoroutineContext.parSequence(effects: Iterable<Kind<F, A>>): Kind<F, List<A>> =
     parTraverse(effects, ::identity)
